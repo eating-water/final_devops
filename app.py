@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import joblib
 import torch
 import torch.nn as nn
@@ -7,13 +6,13 @@ import torch.nn.functional as F
 from xgboost import XGBClassifier
 from pytorch_tabnet.tab_model import TabNetClassifier
 import pennylane as qml
-from pennylane import numpy as qnp
 from flask import Flask, render_template, request, jsonify
 
 app = Flask(__name__)
 
 # ---------------- Define DL Model Architectures ----------------
 class TabNetModel(nn.Module):
+    """A simple TabNet model."""
     def __init__(self):
         super(TabNetModel, self).__init__()
         self.fc1 = nn.Linear(13, 64)
@@ -27,8 +26,7 @@ class TabNetModel(nn.Module):
 
 # ---------------- Quantum Model Functions ----------------
 def create_vqc_circuit(inputs, weights):
-    """Create a Variational Quantum Circuit"""
-    # Quantum node
+    """Create a Variational Quantum Circuit for VQC prediction."""
     @qml.qnode(qml.device("default.qubit", wires=4))
     def circuit():
         # Feature embedding
@@ -45,13 +43,13 @@ def create_vqc_circuit(inputs, weights):
 
         # Measurement
         return [qml.expval(qml.PauliZ(i)) for i in range(4)]
+
     return circuit()
 
 # ---------------- Load Models ----------------
 def load_models():
-    global xgb_model, tabnet_model
-    global vqc_model_data, qnn_model_data
-    global available_models
+    """Load pre-trained models."""
+    global xgb_model, tabnet_model, vqc_model_data, qnn_model_data, available_models
 
     available_models = {
         'xgb': False,
@@ -65,7 +63,7 @@ def load_models():
         xgb_model = XGBClassifier()
         xgb_model.load_model('models/xgboost_model.json')
         available_models['xgb'] = True
-    except Exception as e:
+    except OSError as e:
         print(f"Error loading XGBoost model: {e}")
 
     # Load TabNet model
@@ -74,50 +72,48 @@ def load_models():
         tabnet_model.load_state_dict(torch.load('models/tabnet_model.pt'), strict=False)
         tabnet_model.eval()
         available_models['tabnet'] = True
-    except Exception as e:
+    except OSError as e:
         print(f"Error loading TabNet model: {e}")
 
     # Load VQC model
     try:
         vqc_model_data = joblib.load('models/vqc_model.pkl')
         available_models['vqc'] = True
-    except Exception as e:
+    except OSError as e:
         print(f"Error loading VQC model: {e}")
 
     # Load QNN model
     try:
         qnn_model_data = np.load('models/qnn_model.npz', allow_pickle=True)
         available_models['qnn'] = True
-    except Exception as e:
+    except OSError as e:
         print(f"Error loading QNN model: {e}")
 
     return available_models
 
 # ---------------- Prediction Helpers ----------------
 def predict_vqc(input_data):
-    """Predict with VQC model"""
+    """Predict with VQC model."""
     if not available_models['vqc'] or vqc_model_data is None:
         return None
 
     try:
         if isinstance(vqc_model_data, dict):
-            # Example implementation - adapt based on your actual VQC
             weights = vqc_model_data.get('weights', np.random.rand(3, 4))
             circuit_output = create_vqc_circuit(input_data[0][:4], weights)
             return 1 if np.mean(circuit_output) > 0 else 0
         return None
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         print(f"VQC prediction error: {e}")
         return None
 
 def predict_qnn(input_data):
-    """Predict with QNN model"""
+    """Predict with QNN model."""
     if not available_models['qnn'] or qnn_model_data is None:
         return None
 
     try:
         if isinstance(qnn_model_data, np.lib.npyio.NpzFile):
-            # Example implementation - adapt based on your actual QNN
             weights = qnn_model_data['weights'] if 'weights' in qnn_model_data.files else np.random.rand(3, 4)
             dev = qml.device("default.qubit", wires=4)
 
@@ -133,12 +129,12 @@ def predict_qnn(input_data):
             result = qnn_circuit(input_data[0])
             return 1 if np.mean(result) > 0 else 0
         return None
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         print(f"QNN prediction error: {e}")
         return None
 
 def prepare_input_data(form_data):
-    """Prepare input data for all models"""
+    """Prepare input data for all models."""
     credit_score = float(form_data.get('creditScore'))
     age = float(form_data.get('age'))
     tenure = float(form_data.get('tenure'))
@@ -168,14 +164,17 @@ def prepare_input_data(form_data):
 # ---------------- Flask Routes ----------------
 @app.route('/')
 def index():
+    """Render the main page."""
     return render_template('index.html')
 
 @app.route('/models')
 def models():
+    """Render the models page."""
     return render_template('models.html')
 
 @app.route('/predict', methods=['POST'])
 def predict():
+    """Handle prediction requests."""
     try:
         data = request.get_json()
         input_data = prepare_input_data(data)
@@ -187,7 +186,7 @@ def predict():
         if available_models['xgb']:
             try:
                 predictions['xgb'] = int(xgb_model.predict(input_data)[0])
-            except:
+            except ValueError:
                 predictions['xgb'] = "Error"
 
         # Deep Learning models
@@ -196,8 +195,8 @@ def predict():
                 with torch.no_grad():
                     tabnet_output = tabnet_model(input_tensor)
                     predictions['tabnet'] = 1 if torch.sigmoid(tabnet_output).item() > 0.5 else 0
-            except:
-                predictions['tabnet'] = "Error"
+            except Exception as e:
+                predictions['tabnet'] = "Error: " + str(e)
 
         # Quantum models
         if available_models['vqc']:
